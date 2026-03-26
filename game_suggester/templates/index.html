@@ -1,0 +1,34 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <title>游戏建议助手</title>
+</head>
+<body>
+    <h1>🎮 游戏建议助手</h1>
+    
+    <div>
+        输入房间号：<input type="text" id="roomCode" placeholder="比如：abc123">
+        <button onclick="getSuggest()">🚀 获取建议</button>
+    </div>
+
+    <div id="result" style="margin-top:20px; padding:10px; border:1px solid #ccc;">
+        结果显示区域
+    </div>
+
+    <script>
+        async function getSuggest() {
+            let roomCode = document.getElementById("roomCode").value;
+            if(!roomCode) return alert("请输入房间号！");
+
+            let res = await fetch("/get_suggest", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ room_code: roomCode })
+            });
+            let data = await res.json();
+            document.getElementById("result").innerText = JSON.stringify(data, null, 2);
+        }
+    </script>
+</body>
+</html>
