@@ -1,0 +1,70 @@
+{
+  "users": {
+    "player1": {
+      "password": "a",
+      "wins": 2,
+      "losses": 0,
+      "draws": 0,
+      "totalScore": 26
+    },
+    "player2": {
+      "password": "b",
+      "wins": 0,
+      "losses": 0,
+      "draws": 0,
+      "totalScore": 1000
+    },
+    "player3": {
+      "password": "c",
+      "wins": 0,
+      "losses": 0,
+      "draws": 0,
+      "totalScore": 1000
+    },
+    "Kayn": {
+      "password": "117",
+      "wins": 2,
+      "losses": 3,
+      "draws": 0,
+      "totalScore": 21
+    },
+    "player4": {
+      "password": "d",
+      "wins": 1,
+      "losses": 0,
+      "draws": 0,
+      "totalScore": 22
+    },
+    "test": {
+      "password": "111",
+      "wins": 0,
+      "losses": 1,
+      "draws": 0,
+      "totalScore": 0
+    },
+    "player": {
+      "password": "111",
+      "wins": 1,
+      "losses": 0,
+      "draws": 0,
+      "totalScore": 16
+    },
+    "test1": {
+      "password": "1111",
+      "wins": 2,
+      "losses": 0,
+      "draws": 1,
+      "totalScore": 8
+    },
+    "test2": {
+      "password": "2222",
+      "wins": 0,
+      "losses": 2,
+      "draws": 1,
+      "totalScore": 1000
+    }
+  },
+  "rooms": {},
+  "games": {},
+  "colors": {}
+}

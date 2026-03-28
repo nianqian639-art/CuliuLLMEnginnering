@@ -1,0 +1,183 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Game Suggester</title>
+  <style>
+    :root {
+      --bg: #f5f7fa;
+      --card: #ffffff;
+      --text: #1f2a37;
+      --muted: #5c6b7a;
+      --line: #d6dee6;
+      --accent: #0b7285;
+      --warn: #b35f00;
+      --ok: #2f9e44;
+    }
+    body {
+      margin: 0;
+      background: radial-gradient(circle at top left, #e8f3ff 0%, #f5f7fa 45%, #edf7f3 100%);
+      color: var(--text);
+      font-family: "Segoe UI", "Microsoft YaHei", sans-serif;
+    }
+    .wrap {
+      max-width: 920px;
+      margin: 20px auto;
+      padding: 0 14px;
+    }
+    .card {
+      background: var(--card);
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      padding: 14px;
+      margin-bottom: 12px;
+      box-shadow: 0 4px 16px rgba(0, 0, 0, 0.04);
+    }
+    h1 {
+      margin: 0 0 10px;
+      font-size: 22px;
+    }
+    h2 {
+      margin: 0 0 10px;
+      font-size: 18px;
+    }
+    .form-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+      gap: 10px;
+    }
+    label {
+      display: block;
+      font-size: 13px;
+      color: var(--muted);
+      margin-bottom: 4px;
+    }
+    input {
+      width: 100%;
+      box-sizing: border-box;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 8px 10px;
+      font-size: 14px;
+      background: #fff;
+    }
+    button {
+      border: 0;
+      border-radius: 8px;
+      padding: 10px 14px;
+      font-size: 14px;
+      font-weight: 600;
+      background: var(--accent);
+      color: #fff;
+      cursor: pointer;
+      margin-top: 8px;
+    }
+    button:disabled {
+      opacity: 0.6;
+      cursor: not-allowed;
+    }
+    .muted {
+      color: var(--muted);
+      font-size: 13px;
+    }
+    .kv {
+      display: grid;
+      grid-template-columns: 140px 1fr;
+      gap: 6px;
+      font-size: 14px;
+      margin: 3px 0;
+    }
+    .ok {
+      color: var(--ok);
+      font-weight: 600;
+    }
+    .warn {
+      color: var(--warn);
+      font-weight: 600;
+    }
+    ul {
+      margin: 8px 0 0;
+      padding-left: 18px;
+    }
+    .empty {
+      color: var(--muted);
+      font-size: 14px;
+    }
+    pre {
+      white-space: pre-wrap;
+      word-break: break-word;
+      background: #f8fafc;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 10px;
+      font-size: 12px;
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="card">
+      <h1>game_suggester</h1>
+      <p class="muted">输入房间号，读取对局快照，生成并验证下一步建议（模型 + evaluate_move）。</p>
+      <div class="form-grid">
+        <div>
+          <label for="gameBaseUrl">游戏服务地址</label>
+          <input id="gameBaseUrl" value="http://127.0.0.1:5000">
+        </div>
+        <div>
+          <label for="username">账号</label>
+          <input id="username" value="test1">
+        </div>
+        <div>
+          <label for="password">密码</label>
+          <input id="password" value="1111" type="password">
+        </div>
+        <div>
+          <label for="roomCode">房间号</label>
+          <input id="roomCode" value="1E4E9F">
+        </div>
+        <div>
+          <label for="model">模型</label>
+          <input id="model" value="qwen3.5:0.8b">
+        </div>
+        <div>
+          <label for="promptVersion">Prompt 版本</label>
+          <input id="promptVersion" value="default" list="promptVersionsList">
+          <datalist id="promptVersionsList"></datalist>
+        </div>
+        <div>
+          <label for="maxCandidates">候选数</label>
+          <input id="maxCandidates" value="6" type="number" min="1" max="20">
+        </div>
+      </div>
+      <button id="runBtn">生成建议</button>
+      <p id="status" class="muted"></p>
+    </div>
+
+    <div class="card">
+      <h2>快照信息</h2>
+      <div id="snapshot" class="empty">暂无数据</div>
+    </div>
+
+    <div class="card">
+      <h2>最佳建议</h2>
+      <div id="best" class="empty">暂无数据</div>
+    </div>
+
+    <div class="card">
+      <h2>备选建议</h2>
+      <div id="alts" class="empty">暂无数据</div>
+    </div>
+
+    <div class="card">
+      <h2>告警与调试</h2>
+      <div id="warnings" class="empty">暂无数据</div>
+      <pre id="raw"></pre>
+    </div>
+  </div>
+
+  <script src="{{ url_for('static', filename='app.js') }}"></script>
+</body>
+</html>
+
