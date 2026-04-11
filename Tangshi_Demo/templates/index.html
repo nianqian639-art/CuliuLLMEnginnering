@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>唐诗仿作 Demo</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+  <main class="container">
+    <section class="card">
+      <h1>唐诗仿作 Demo</h1>
+      <p class="muted">输入作诗要求，选择诗人风格，后端使用 Ollama: bge-m3 检索 + qwen3.5:0.8b 生成。</p>
+      <div class="grid">
+        <label>
+          作诗要求
+          <textarea id="requirement" rows="4" placeholder="例如：写一首关于春夜江边思乡的七言绝句"></textarea>
+        </label>
+        <label>
+          诗人风格
+          <select id="authorStyle"></select>
+        </label>
+        <label>
+          检索参考数 top_k
+          <input id="topK" type="number" min="1" max="10" value="5">
+        </label>
+      </div>
+      <div class="action-row">
+        <button id="generateBtn">生成诗作</button>
+        <button id="refreshRecentBtn" class="secondary">刷新最近诗作</button>
+      </div>
+      <p id="status" class="muted"></p>
+    </section>
+
+    <section class="card">
+      <h2>生成结果</h2>
+      <pre id="poemResult" class="poem">暂无结果</pre>
+      <div id="meta" class="meta"></div>
+    </section>
+
+    <section class="card">
+      <h2>检索参考诗作</h2>
+      <div id="references" class="list-empty">暂无数据</div>
+    </section>
+
+    <section class="card">
+      <h2>最近几首（来自 300.json）</h2>
+      <div id="recentPoems" class="list-empty">加载中...</div>
+    </section>
+  </main>
+
+  <script src="{{ url_for('static', filename='app.js') }}"></script>
+</body>
+</html>
