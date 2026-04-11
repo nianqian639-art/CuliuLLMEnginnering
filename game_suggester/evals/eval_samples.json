@@ -1,0 +1,154 @@
+[
+  {
+    "sample_id": "live_midgame_main",
+    "source_type": "live_room",
+    "scene_tags": ["midgame", "standard_board", "shared_sample"],
+    "focus": "常规中局，验证三版 Prompt 在真实房间中的合法候选质量。",
+    "game_base_url": "http://127.0.0.1:5000",
+    "username": "test1",
+    "password": "1111",
+    "room_code": "1E4E9F",
+    "max_candidates": 6
+  },
+  {
+    "sample_id": "live_midgame_alt_player",
+    "source_type": "live_room",
+    "scene_tags": ["midgame", "shared_sample", "turn_warning"],
+    "focus": "检查回合不匹配时 warning 是否清晰。",
+    "game_base_url": "http://127.0.0.1:5000",
+    "username": "test2",
+    "password": "2222",
+    "room_code": "1E4E9F",
+    "max_candidates": 6
+  },
+  {
+    "sample_id": "live_bad_password",
+    "source_type": "live_room",
+    "scene_tags": ["failure_case", "auth"],
+    "focus": "密码错误时是否有明确失败原因。",
+    "game_base_url": "http://127.0.0.1:5000",
+    "username": "test1",
+    "password": "bad-password",
+    "room_code": "1E4E9F",
+    "max_candidates": 6
+  },
+  {
+    "sample_id": "live_not_room_player",
+    "source_type": "live_room",
+    "scene_tags": ["failure_case", "room_identity"],
+    "focus": "非房间玩家账号是否会在评估阶段失败，并留下可分析信息。",
+    "game_base_url": "http://127.0.0.1:5000",
+    "username": "player1",
+    "password": "a",
+    "room_code": "1E4E9F",
+    "max_candidates": 6
+  },
+  {
+    "sample_id": "static_sparse_3x3",
+    "source_type": "static_snapshot",
+    "scene_tags": ["sparse", "standard_board"],
+    "focus": "稀疏盘面下模型是否能稳定给出结构化候选。",
+    "snapshot": {
+      "roomCode": "STATIC-001",
+      "currentTurn": "player1",
+      "player1": "test1",
+      "player2": "test2",
+      "grid": [
+        ["1", null, null],
+        [null, null, null],
+        [null, null, "2"]
+      ]
+    },
+    "max_candidates": 6
+  },
+  {
+    "sample_id": "static_dense_3x3",
+    "source_type": "static_snapshot",
+    "scene_tags": ["dense", "standard_board"],
+    "focus": "密集盘面下能否把候选聚焦到即将填满的行列。",
+    "snapshot": {
+      "roomCode": "STATIC-002",
+      "currentTurn": "player2",
+      "player1": "test1",
+      "player2": "test2",
+      "grid": [
+        ["1", "2", null],
+        ["2", null, "1"],
+        [null, "1", null]
+      ]
+    },
+    "max_candidates": 6
+  },
+  {
+    "sample_id": "static_with_x",
+    "source_type": "static_snapshot",
+    "scene_tags": ["contains_x", "midgame"],
+    "focus": "含 X 局面时能否正确理解 X 可重复的规则。",
+    "snapshot": {
+      "roomCode": "STATIC-003",
+      "currentTurn": "player1",
+      "player1": "test1",
+      "player2": "test2",
+      "grid": [
+        ["X", "2", null],
+        [null, "X", null],
+        ["1", null, null]
+      ]
+    },
+    "max_candidates": 6
+  },
+  {
+    "sample_id": "static_rect_2x4",
+    "source_type": "static_snapshot",
+    "scene_tags": ["boundary_size", "rectangular_board"],
+    "focus": "非标准尺寸 2x4 棋盘的候选稳定性。",
+    "snapshot": {
+      "roomCode": "STATIC-004",
+      "currentTurn": "player1",
+      "player1": "test1",
+      "player2": "test2",
+      "grid": [
+        ["1", null, "3", null],
+        [null, "2", null, null]
+      ]
+    },
+    "max_candidates": 6
+  },
+  {
+    "sample_id": "static_rect_4x2",
+    "source_type": "static_snapshot",
+    "scene_tags": ["boundary_size", "rectangular_board"],
+    "focus": "非标准尺寸 4x2 棋盘的候选稳定性。",
+    "snapshot": {
+      "roomCode": "STATIC-005",
+      "currentTurn": "player2",
+      "player1": "test1",
+      "player2": "test2",
+      "grid": [
+        ["1", null],
+        [null, "2"],
+        ["X", null],
+        [null, null]
+      ]
+    },
+    "max_candidates": 6
+  },
+  {
+    "sample_id": "static_almost_full",
+    "source_type": "static_snapshot",
+    "scene_tags": ["dense", "near_finish"],
+    "focus": "接近满盘时候选是否更集中且合法率更高。",
+    "snapshot": {
+      "roomCode": "STATIC-006",
+      "currentTurn": "player1",
+      "player1": "test1",
+      "player2": "test2",
+      "grid": [
+        ["1", "2", null],
+        ["2", "X", "1"],
+        ["X", null, "2"]
+      ]
+    },
+    "max_candidates": 6
+  }
+]

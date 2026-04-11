@@ -1,31 +1,33 @@
 # game_suggester
 
-基于 `game_coach_game` 的课堂实验项目。  
-在 Lesson03 中，本项目主要用于提供 **Prompt 案例与输入输出参考**，而不是给学生直接套用的完整测评框架。
+`game_suggester` 是 Lesson 03 的课堂主线项目。它连接 `game_coach_game` 的实时房间，读取对局快照，调用本地大模型生成候选走法，再用 `evaluate_move` 二次校验，最后输出更可信的下一步建议。
 
-> 目录分工：  
-> - 学生版：`01_base_repo/game_suggester`（本目录）  
-> - 教师版：`01_base_repo/game_suggester_teacher`（课堂演示与批量评测）
+这个项目现在同时承担两件事：
 
-## 1. 已实现功能
+1. 作为可演示的建议器应用
+2. 作为 Prompt 评测的最小闭环
 
-- 输入游戏服务地址、账号、密码、房间号后，一键生成建议。
-- 后端先调用 `GET /api/coach/snapshot/<room_code>` 获取对局快照。
-- 使用 Prompt + Ollama（默认 `qwen3.5:0.8b`）生成候选走法。
-- 对每条候选调用 `POST /api/coach/evaluate_move` 验证合法性与影响。
-- 输出最终建议（位置、输入值、理由、风险、置信度）与备选建议。
-- 当模型不可用或输出异常时，自动切换到规则启发式兜底。
-- 支持 `promptVersion` 切换（`default` / `zero_shot` / `one_shot` / `few_shot`）。
+## 已实现能力
 
-## 2. 游戏机制总结（基于源码与接口）
+- 输入游戏服务地址、账号、密码、房间号后，一键生成建议
+- 后端先调用 `GET /api/coach/snapshot/<room_code>` 获取对局快照
+- 使用 Prompt + Ollama 生成候选动作
+- 对每条候选调用 `POST /api/coach/evaluate_move` 验证合法性与收益
+- 输出最佳建议、备选建议、风险提示和置信度
+- 当模型不可用或输出异常时，自动回退到启发式候选
+- 支持 `promptVersion` 切换：`default / zero_shot / one_shot / few_shot`
+- 支持 Lesson 03 批量评测：实时房间样本 + 静态快照样本
 
-- 棋盘为 `rows x cols`，轮流在空格子输入数字或 `X`。
-- 合法性：同一行/列的数字不能重复；`X` 可重复。
-- 计分触发：只有当某一整行或整列填满时才触发计分。
-- 计分逻辑：令该线非 `X` 数字个数为 `n`，若线中存在值等于 `n` 的格子，则该格所属玩家可得 `n` 分（每玩家每线最多一次）。
-- 教练评估接口会返回：`isLegal`、`reason`、`scoreDelta`、`nextTurn`、`turnSkipped`。
+## 游戏规则摘要
 
-## 3. 目录结构
+- 棋盘是 `rows x cols`
+- 只能在空格子落子
+- 同一行、同一列的数字不能重复
+- `X` 可以重复
+- 通常只有整行或整列填满时才触发计分检查
+- 建议器会优先考虑合法性、当前收益和后续延展空间
+
+## 目录结构
 
 ```text
 game_suggester/
@@ -40,12 +42,20 @@ game_suggester/
 │  ├─ zero_shot.md
 │  ├─ one_shot.md
 │  └─ few_shot.md
+├─ evals/
+│  ├─ eval_samples.json
+│  └─ run_prompt_eval.py
 ├─ logs/
 │  └─ test_log.md
+├─ eval_plan.md
+├─ prompt_eval_sheet_lesson03.csv
+├─ prompt_eval_summary.md
+├─ prompt_eval_report_draft.md
+├─ personal_project_method_draft.md
 └─ README.md
 ```
 
-## 4. 运行方式
+## 运行应用
 
 在仓库根目录执行：
 
@@ -57,14 +67,13 @@ python game_suggester/app.py
 
 - `http://127.0.0.1:5001`
 
-默认页面已预填：
+默认页面参数：
 
-- 服务地址：`http://127.0.0.1:5000`
-- 房间号：`1E4E9F`
+- 游戏服务地址：`http://127.0.0.1:5000`
 - 模型：`qwen3.5:0.8b`
 - Prompt 版本：`default`
 
-## 5. API
+## API
 
 ### `POST /api/suggest`
 
@@ -82,10 +91,10 @@ python game_suggester/app.py
 }
 ```
 
-返回字段包含：
+返回核心字段：
 
 - `snapshotMeta`
-- `bestSuggestion`（含位置/输入值/理由/风险/置信度/验证结果）
+- `bestSuggestion`
 - `alternatives`
 - `warnings`
 - `promptVersion`
@@ -96,35 +105,52 @@ python game_suggester/app.py
 
 返回可用 Prompt 版本列表。
 
-## 6. Prompt 设计要点
+## Lesson 03 评测使用方式
 
-- 角色：游戏建议助手。
-- 任务：给出下一步候选。
-- 状态输入：来自 `snapshot`。
-- 固定输出：严格 JSON `candidates`。
-- 展示前：每条候选都经过 `evaluate_move` 二次验证。
+课堂对比实验只改一个主变量：`prompt_version`。默认对比：
 
-详细 Prompt：
+- `zero_shot`
+- `one_shot`
+- `few_shot`
 
-- 默认版：`prompts/suggest_prompt.md`
-- 对比版：`prompt_versions/zero_shot.md`、`prompt_versions/one_shot.md`、`prompt_versions/few_shot.md`
+评测样本定义在 [eval_samples.json](/c:/Users/dda1999/Documents/GitHub/CuliuLLMEnginnering/game_suggester/evals/eval_samples.json)。
 
-## 7. Lesson03 推荐实验流程
+批量评测脚本：
 
-1. 参考本项目提供的 Prompt 案例（`default / zero_shot / one_shot / few_shot`）
-2. 学生自行选择评测实现方式（CSV、Markdown、脚本或页面）
-3. 自行设计样本并对比关键指标：
-   - `format_ok`
-   - `usable`
-   - `legal_pass_rate`
-   - `reason_quality`
-4. 记录失败样本并写修复动作
+```bash
+python game_suggester/evals/run_prompt_eval.py
+```
 
-## 8. Lesson03 教师与学生使用边界
+常用参数：
 
-### 学生侧（课堂主线）
+```bash
+python game_suggester/evals/run_prompt_eval.py --help
+python game_suggester/evals/run_prompt_eval.py --prompt-versions zero_shot one_shot few_shot
+python game_suggester/evals/run_prompt_eval.py --reason-quality-mode auto
+```
 
-- 重点：自己设计并实现最小评测框
-- 可用：`prompts/` 与 `prompt_versions/` 作为 Prompt 案例
-- 不建议：把教师版自动化评测当成课堂作业成品
+默认输出：
 
+- [prompt_eval_sheet_lesson03.csv](/c:/Users/dda1999/Documents/GitHub/CuliuLLMEnginnering/game_suggester/prompt_eval_sheet_lesson03.csv)
+- [prompt_eval_summary.md](/c:/Users/dda1999/Documents/GitHub/CuliuLLMEnginnering/game_suggester/prompt_eval_summary.md)
+
+## 课堂交付建议顺序
+
+1. 先阅读 [eval_plan.md](/c:/Users/dda1999/Documents/GitHub/CuliuLLMEnginnering/game_suggester/eval_plan.md)
+2. 确认评测样本和 Prompt 版本
+3. 跑批量评测脚本生成 CSV 和 summary
+4. 补人工 `reason_quality`
+5. 完成 [prompt_eval_report_draft.md](/c:/Users/dda1999/Documents/GitHub/CuliuLLMEnginnering/game_suggester/prompt_eval_report_draft.md)
+6. 从失败样本中挑 1-2 条做课堂展示
+
+## 个人项目迁移
+
+个人项目不必重写整套框架。建议直接复用：
+
+- `zero/one/few` 的 Prompt 对比方法
+- 样本分层思路
+- CSV 记录字段
+- 失败样本复盘模板
+- 报告结构
+
+参考草稿见 [personal_project_method_draft.md](/c:/Users/dda1999/Documents/GitHub/CuliuLLMEnginnering/game_suggester/personal_project_method_draft.md)。

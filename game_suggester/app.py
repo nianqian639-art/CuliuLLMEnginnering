@@ -1,8 +1,9 @@
 import json
 import os
 import re
+import uuid
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import requests
 from flask import Flask, jsonify, render_template, request
@@ -76,13 +77,16 @@ def parse_json_strict_or_embedded(text: str) -> Dict[str, Any]:
         return json.loads(text)
     except json.JSONDecodeError:
         pass
+
     fenced = re.search(r"```(?:json)?\s*(\{[\s\S]*\})\s*```", text, flags=re.IGNORECASE)
     if fenced:
         return json.loads(fenced.group(1))
+
     start = text.find("{")
     end = text.rfind("}")
     if start >= 0 and end > start:
         return json.loads(text[start : end + 1])
+
     raise ValueError("model output is not valid json")
 
 
@@ -141,6 +145,7 @@ def ollama_chat_json(system_prompt: str, user_prompt: str, model: str) -> Dict[s
                 r.json().get("choices", [{}])[0].get("message", {}).get("content", "").strip()
             )
             return parse_json_strict_or_embedded(text)
+
         r.raise_for_status()
         text = r.json().get("response", "").strip()
         return parse_json_strict_or_embedded(text)
@@ -172,7 +177,7 @@ def fetch_snapshot(session: requests.Session, base_url: str, room_code: str) -> 
     return data["snapshot"]
 
 
-def evaluate_move(
+def evaluate_move_remote(
     session: requests.Session,
     base_url: str,
     room_code: str,
@@ -192,6 +197,121 @@ def evaluate_move(
     return data["evaluation"]
 
 
+def normalize_cell_value(cell: Any) -> Optional[str]:
+    if cell is None:
+        return None
+    if isinstance(cell, dict):
+        raw = cell.get("value")
+    else:
+        raw = cell
+    if raw is None:
+        return None
+    text = str(raw).strip()
+    return text or None
+
+
+def normalize_grid(grid: List[List[Any]]) -> List[List[Optional[Dict[str, str]]]]:
+    normalized: List[List[Optional[Dict[str, str]]]] = []
+    for row in grid:
+        normalized_row: List[Optional[Dict[str, str]]] = []
+        for cell in row:
+            value = normalize_cell_value(cell)
+            normalized_row.append(None if value is None else {"value": value})
+        normalized.append(normalized_row)
+    return normalized
+
+
+def coerce_snapshot(snapshot: Dict[str, Any]) -> Dict[str, Any]:
+    normalized = dict(snapshot)
+    normalized["grid"] = normalize_grid(snapshot["grid"])
+    normalized.setdefault("roomCode", snapshot.get("roomCode") or "STATIC")
+    normalized.setdefault("gameId", snapshot.get("gameId") or f"static-{uuid.uuid4().hex[:8]}")
+    normalized.setdefault("rulesVersion", snapshot.get("rulesVersion") or "static-v1")
+    normalized.setdefault("status", snapshot.get("status") or "IN_PROGRESS")
+    normalized.setdefault("currentTurn", snapshot.get("currentTurn") or "player1")
+    normalized.setdefault("player1", snapshot.get("player1") or "player1")
+    normalized.setdefault("player2", snapshot.get("player2") or "player2")
+    normalized.setdefault("player1Score", int(snapshot.get("player1Score") or 0))
+    normalized.setdefault("player2Score", int(snapshot.get("player2Score") or 0))
+    return normalized
+
+
+def evaluate_move_static(
+    snapshot: Dict[str, Any],
+    row: int,
+    col: int,
+    value: str,
+) -> Dict[str, Any]:
+    grid = snapshot["grid"]
+    rows = len(grid)
+    cols = len(grid[0]) if rows else 0
+    value_text = str(value).strip()
+
+    if row < 0 or col < 0 or row >= rows or col >= cols:
+        return {
+            "isLegal": False,
+            "reason": "坐标越界",
+            "reasonCode": "INVALID_POSITION",
+            "scoreDelta": {"player1": 0, "player2": 0},
+            "nextTurn": snapshot.get("currentTurn"),
+            "turnSkipped": False,
+        }
+    if grid[row][col] is not None:
+        return {
+            "isLegal": False,
+            "reason": "该格子已经有值",
+            "reasonCode": "CELL_OCCUPIED",
+            "scoreDelta": {"player1": 0, "player2": 0},
+            "nextTurn": snapshot.get("currentTurn"),
+            "turnSkipped": False,
+        }
+    if not value_text:
+        return {
+            "isLegal": False,
+            "reason": "缺少落子值",
+            "reasonCode": "INVALID_VALUE",
+            "scoreDelta": {"player1": 0, "player2": 0},
+            "nextTurn": snapshot.get("currentTurn"),
+            "turnSkipped": False,
+        }
+    if value_text.lower() != "x":
+        for c, cell in enumerate(grid[row]):
+            if c == col or cell is None:
+                continue
+            if str(cell.get("value")) == value_text:
+                return {
+                    "isLegal": False,
+                    "reason": "同行数字重复",
+                    "reasonCode": "ROW_DUPLICATE",
+                    "scoreDelta": {"player1": 0, "player2": 0},
+                    "nextTurn": snapshot.get("currentTurn"),
+                    "turnSkipped": False,
+                }
+        for r, row_cells in enumerate(grid):
+            cell = row_cells[col]
+            if r == row or cell is None:
+                continue
+            if str(cell.get("value")) == value_text:
+                return {
+                    "isLegal": False,
+                    "reason": "同列数字重复",
+                    "reasonCode": "COL_DUPLICATE",
+                    "scoreDelta": {"player1": 0, "player2": 0},
+                    "nextTurn": snapshot.get("currentTurn"),
+                    "turnSkipped": False,
+                }
+
+    next_turn = "player2" if snapshot.get("currentTurn") == "player1" else "player1"
+    return {
+        "isLegal": True,
+        "reason": "静态样本规则校验通过",
+        "reasonCode": "OK",
+        "scoreDelta": {"player1": 0, "player2": 0},
+        "nextTurn": next_turn,
+        "turnSkipped": False,
+    }
+
+
 def normalize_candidate(raw: Dict[str, Any], source: str) -> Optional[Candidate]:
     try:
         row = int(raw.get("row"))
@@ -204,8 +324,8 @@ def normalize_candidate(raw: Dict[str, Any], source: str) -> Optional[Candidate]
     value = str(value_raw).strip()
     if not value:
         return None
-    reason = str(raw.get("reason", "")).strip() or "模型给出的候选走法"
-    risk = str(raw.get("risk", "")).strip() or "可能存在规则冲突或收益不稳定"
+    reason = str(raw.get("reason", "")).strip() or "模型给出了这个候选走法。"
+    risk = str(raw.get("risk", "")).strip() or "可能存在规则冲突，或后续收益不稳定。"
     return Candidate(row=row, col=col, value=value, reason=reason, risk=risk, source=source)
 
 
@@ -223,15 +343,17 @@ def model_candidates(
     parsed = ollama_chat_json(system_prompt=system_prompt, user_prompt=user_prompt, model=model)
     raw_list = parsed.get("candidates", [])
     if not isinstance(raw_list, list):
-        return [], "模型返回格式不符合预期，已启用兜底"
+        return [], "模型返回格式不符合预期，已启用规则兜底。"
+
     out: List[Candidate] = []
     for item in raw_list:
         if isinstance(item, dict):
-            c = normalize_candidate(item, source="model")
-            if c:
-                out.append(c)
+            candidate = normalize_candidate(item, source="model")
+            if candidate:
+                out.append(candidate)
+
     if not out:
-        return [], "模型未给出有效候选，已启用兜底"
+        return [], "模型没有给出有效候选，已启用规则兜底。"
     return out, ""
 
 
@@ -270,12 +392,13 @@ def heuristic_candidates(snapshot: Dict[str, Any], limit: int = 20) -> List[Cand
                 if value.lower() == "x":
                     score -= 0.8
                 reason = (
-                    f"优先补充接近完成的线（行已占 {row_fill}/{cols}，列已占 {col_fill}/{rows}）"
+                    f"优先补接近完成的线：该行已占 {row_fill}/{cols}，该列已占 {col_fill}/{rows}。"
                 )
-                risk = "若后续无法形成 value=n 的触发格，得分可能不高"
+                risk = "如果后续无法形成触发得分的整行或整列，这步的收益可能有限。"
                 moves.append(
                     (score, Candidate(row=r, col=c, value=value, reason=reason, risk=risk, source="heuristic"))
                 )
+
     moves.sort(key=lambda x: x[0], reverse=True)
     return [item[1] for item in moves[:limit]]
 
@@ -357,26 +480,46 @@ def snapshot_meta(snapshot: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-def suggest(
-    game_base_url: str,
-    username: str,
-    password: str,
-    room_code: str,
+def build_no_legal_result(
+    snapshot: Dict[str, Any],
+    prompt_version: str,
+    warnings: List[str],
+    ranked: List[Dict[str, Any]],
+    legal_only: List[Dict[str, Any]],
+    max_candidates: int,
+) -> Dict[str, Any]:
+    top = ranked[0] if ranked else None
+    return {
+        "success": False,
+        "message": "未找到合法候选，请检查房间状态、样本定义或当前账号身份。",
+        "warnings": warnings,
+        "promptVersion": prompt_version,
+        "snapshotMeta": snapshot_meta(snapshot),
+        "bestAttempt": top,
+        "candidates": ranked[:max_candidates],
+        "legalCandidateCount": len(legal_only),
+    }
+
+
+def suggest_from_snapshot(
+    snapshot: Dict[str, Any],
     model: str,
     max_candidates: int,
     prompt_version: str = "default",
+    username: Optional[str] = None,
+    evaluator: Optional[Callable[[int, int, str], Dict[str, Any]]] = None,
 ) -> Dict[str, Any]:
-    session = requests.Session()
-    login_game(session, game_base_url, username, password)
-    snapshot = fetch_snapshot(session, game_base_url, room_code)
-
+    snapshot = coerce_snapshot(snapshot)
     warnings: List[str] = []
     expected_user = expected_turn_username(snapshot)
-    username_matches_turn = expected_user == username
-    if expected_user and expected_user != username:
-        warnings.append(
-            f"当前回合应由 {expected_user} 操作，你当前登录为 {username}。评估结果可能与真实下一手存在偏差。"
-        )
+    username_matches_turn = True
+
+    if username:
+        username_matches_turn = expected_user == username
+        if expected_user and expected_user != username:
+            warnings.append(
+                f"当前回合应由 {expected_user} 操作，你当前使用的是 {username}。评估结果可能与真实下一手存在偏差。"
+            )
 
     model_err = ""
     model_used = True
@@ -395,10 +538,13 @@ def suggest(
     all_candidates = dedupe_candidates(model_cands + heuristics)
     all_candidates = all_candidates[: max(20, max_candidates * 3)]
 
+    if evaluator is None:
+        evaluator = lambda row, col, value: evaluate_move_static(snapshot, row, col, value)
+
     evaluated: List[Dict[str, Any]] = []
     for c in all_candidates:
         try:
-            ev = evaluate_move(session, game_base_url, room_code, c.row, c.col, c.value)
+            ev = evaluator(c.row, c.col, c.value)
             evaluated.append(
                 {
                     "candidate": {
@@ -435,19 +581,16 @@ def suggest(
             )
 
     ranked = rank_results(evaluated, current_turn=snapshot["currentTurn"])
-    legal_only = [x for x in ranked if x["evaluation"].get("isLegal")]
+    legal_only = [item for item in ranked if item["evaluation"].get("isLegal")]
     if not legal_only:
-        top = ranked[0] if ranked else None
-        return {
-            "success": False,
-            "message": "未找到合法候选，请检查房间状态或更换账号后重试",
-            "warnings": warnings,
-            "promptVersion": prompt_version,
-            "snapshotMeta": snapshot_meta(snapshot),
-            "bestAttempt": top,
-            "candidates": ranked[:max_candidates],
-            "legalCandidateCount": len(legal_only),
-        }
+        return build_no_legal_result(
+            snapshot,
+            prompt_version,
+            warnings,
+            ranked,
+            legal_only,
+            max_candidates,
+        )
 
     best = legal_only[0]
     current_turn = snapshot["currentTurn"]
@@ -455,7 +598,7 @@ def suggest(
     best_delta = best["evaluation"].get("scoreDelta", {})
     top_net_gain = int(best_delta.get(current_turn, 0)) - int(best_delta.get(other, 0))
     confidence = compute_confidence(
-        is_model_used=model_used and any(c["candidate"]["source"] == "model" for c in ranked),
+        is_model_used=model_used and any(item["candidate"]["source"] == "model" for item in ranked),
         legal_count=len(legal_only),
         top_net_gain=top_net_gain,
         username_matches_turn=username_matches_turn,
@@ -474,6 +617,30 @@ def suggest(
     }
 
 
+def suggest(
+    game_base_url: str,
+    username: str,
+    password: str,
+    room_code: str,
+    model: str,
+    max_candidates: int,
+    prompt_version: str = "default",
+) -> Dict[str, Any]:
+    session = requests.Session()
+    login_game(session, game_base_url, username, password)
+    snapshot = fetch_snapshot(session, game_base_url, room_code)
+
+    def remote_evaluator(row: int, col: int, value: str) -> Dict[str, Any]:
+        return evaluate_move_remote(session, game_base_url, room_code, row, col, value)
+
+    return suggest_from_snapshot(
+        snapshot=snapshot,
+        model=model,
+        max_candidates=max_candidates,
+        prompt_version=prompt_version,
+        username=username,
+        evaluator=remote_evaluator,
+    )
 
 
 @app.route("/")
@@ -519,7 +686,7 @@ def api_suggest() -> Any:
     except requests.HTTPError as e:
         return jsonify({"success": False, "message": f"HTTP error: {e}"}), 502
     except requests.RequestException as e:
-        return jsonify({"success": False, "message": f"网络请求失败: {e}"}), 502
+        return jsonify({"success": False, "message": f"网络请求失败：{e}"}), 502
     except Exception as e:
         return jsonify({"success": False, "message": str(e)}), 500
 
@@ -537,4 +704,3 @@ def api_prompt_versions() -> Any:
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5001, debug=True)
-
