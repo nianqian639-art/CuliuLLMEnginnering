@@ -46,6 +46,21 @@ ollama pull qwen3.5:0.8b
 ollama list
 ```
 
+可选环境变量（按 `test_connect.py` 风格）：
+
+```bash
+# 默认就是 generate 输出模式，可不填
+set OLLAMA_OUTPUT_MODE=generate
+
+# 若你的网关要求 Bearer Token，可配置
+set OLLAMA_API_TOKEN=你的token
+
+# 如需切换地址/模型
+set OLLAMA_BASE_URL=http://127.0.0.1:11434
+set OLLAMA_CHAT_MODEL=qwen3.5:0.8b
+set OLLAMA_EMBED_MODEL=bge-m3
+```
+
 ## 4. 启动 Demo
 
 ```bash

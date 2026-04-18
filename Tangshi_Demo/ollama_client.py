@@ -7,6 +7,8 @@ OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://127.0.0.1:11434").rstrip(
 DEFAULT_CHAT_MODEL = os.getenv("OLLAMA_CHAT_MODEL", "qwen3.5:0.8b")
 DEFAULT_EMBED_MODEL = os.getenv("OLLAMA_EMBED_MODEL", "bge-m3")
 OLLAMA_THINKING = os.getenv("OLLAMA_THINKING", "0").lower() in ("1", "true", "yes", "on")
+OLLAMA_OUTPUT_MODE = os.getenv("OLLAMA_OUTPUT_MODE", "generate").strip().lower()
+OLLAMA_API_TOKEN = os.getenv("OLLAMA_API_TOKEN", "").strip()
 
 
 def _maybe_disable_thinking(text: str) -> str:
@@ -15,15 +17,38 @@ def _maybe_disable_thinking(text: str) -> str:
     return "/no_think\n" + text
 
 
-def chat(
-    system_prompt: str,
-    user_prompt: str,
-    model: str = DEFAULT_CHAT_MODEL,
-    timeout: int = 120,
-    temperature: float = 0.6,
-) -> str:
-    final_user_prompt = _maybe_disable_thinking(user_prompt)
+def _request_headers() -> dict:
+    headers = {}
+    if OLLAMA_API_TOKEN:
+        headers["Authorization"] = f"Bearer {OLLAMA_API_TOKEN}"
+    return headers
 
+
+def _post(path: str, payload: dict, timeout: int) -> requests.Response:
+    return requests.post(
+        f"{OLLAMA_BASE_URL}{path}",
+        json=payload,
+        headers=_request_headers(),
+        timeout=timeout,
+    )
+
+
+def _chat_via_generate(system_prompt: str, final_user_prompt: str, model: str, timeout: int, temperature: float) -> str:
+    payload_generate = {
+        "model": model,
+        "stream": False,
+        "prompt": final_user_prompt,
+        "system": system_prompt,
+        "options": {"temperature": temperature},
+    }
+    resp = _post("/api/generate", payload_generate, timeout=timeout)
+    if resp.status_code == 404:
+        return ""
+    resp.raise_for_status()
+    return resp.json().get("response", "").strip()
+
+
+def _chat_via_chat(system_prompt: str, final_user_prompt: str, model: str, timeout: int, temperature: float) -> str:
     payload_chat = {
         "model": model,
         "stream": False,
@@ -35,43 +60,64 @@ def chat(
         ],
         "options": {"temperature": temperature},
     }
-    resp = requests.post(f"{OLLAMA_BASE_URL}/api/chat", json=payload_chat, timeout=timeout)
+    resp = _post("/api/chat", payload_chat, timeout=timeout)
     if resp.status_code == 404:
-        payload_generate = {
-            "model": model,
-            "stream": False,
-            "think": OLLAMA_THINKING,
-            "thinking": OLLAMA_THINKING,
-            "prompt": f"[SYSTEM]\n{system_prompt}\n\n[USER]\n{final_user_prompt}",
-            "options": {"temperature": temperature},
-        }
-        resp = requests.post(f"{OLLAMA_BASE_URL}/api/generate", json=payload_generate, timeout=timeout)
-        if resp.status_code == 404:
-            payload_openai = {
-                "model": model,
-                "temperature": temperature,
-                "messages": [
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": final_user_prompt},
-                ],
-            }
-            resp = requests.post(
-                f"{OLLAMA_BASE_URL}/v1/chat/completions", json=payload_openai, timeout=timeout
-            )
-            resp.raise_for_status()
-            return (
-                resp.json().get("choices", [{}])[0].get("message", {}).get("content", "").strip()
-            )
-        resp.raise_for_status()
-        return resp.json().get("response", "").strip()
-
+        return ""
     resp.raise_for_status()
     return resp.json().get("message", {}).get("content", "").strip()
 
 
+def _chat_via_openai(system_prompt: str, final_user_prompt: str, model: str, timeout: int, temperature: float) -> str:
+    payload_openai = {
+        "model": model,
+        "temperature": temperature,
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": final_user_prompt},
+        ],
+    }
+    resp = _post("/v1/chat/completions", payload_openai, timeout=timeout)
+    if resp.status_code == 404:
+        return ""
+    resp.raise_for_status()
+    return resp.json().get("choices", [{}])[0].get("message", {}).get("content", "").strip()
+
+
+def chat(
+    system_prompt: str,
+    user_prompt: str,
+    model: str = DEFAULT_CHAT_MODEL,
+    timeout: int = 120,
+    temperature: float = 0.6,
+) -> str:
+    final_user_prompt = _maybe_disable_thinking(user_prompt)
+    mode_order = {
+        "generate": ("generate", "chat", "openai"),
+        "chat": ("chat", "generate", "openai"),
+        "openai": ("openai", "chat", "generate"),
+    }.get(OLLAMA_OUTPUT_MODE, ("generate", "chat", "openai"))
+
+    errors = []
+    for mode in mode_order:
+        try:
+            if mode == "generate":
+                text = _chat_via_generate(system_prompt, final_user_prompt, model, timeout, temperature)
+            elif mode == "chat":
+                text = _chat_via_chat(system_prompt, final_user_prompt, model, timeout, temperature)
+            else:
+                text = _chat_via_openai(system_prompt, final_user_prompt, model, timeout, temperature)
+            if text:
+                return text
+            errors.append(f"{mode}: empty response")
+        except Exception as exc:
+            errors.append(f"{mode}: {exc}")
+            continue
+    raise RuntimeError("模型接口不可用：" + " | ".join(errors))
+
+
 def _embed_via_api_embed(texts: Sequence[str], model: str, timeout: int) -> List[List[float]]:
     payload = {"model": model, "input": list(texts)}
-    resp = requests.post(f"{OLLAMA_BASE_URL}/api/embed", json=payload, timeout=timeout)
+    resp = _post("/api/embed", payload, timeout=timeout)
     if resp.status_code == 404:
         return []
     resp.raise_for_status()
@@ -86,7 +132,7 @@ def _embed_via_api_embeddings(texts: Sequence[str], model: str, timeout: int) ->
     vectors: List[List[float]] = []
     for text in texts:
         payload = {"model": model, "prompt": text}
-        resp = requests.post(f"{OLLAMA_BASE_URL}/api/embeddings", json=payload, timeout=timeout)
+        resp = _post("/api/embeddings", payload, timeout=timeout)
         if resp.status_code == 404:
             return []
         resp.raise_for_status()
@@ -99,7 +145,7 @@ def _embed_via_api_embeddings(texts: Sequence[str], model: str, timeout: int) ->
 
 def _embed_via_openai_compat(texts: Sequence[str], model: str, timeout: int) -> List[List[float]]:
     payload = {"model": model, "input": list(texts)}
-    resp = requests.post(f"{OLLAMA_BASE_URL}/v1/embeddings", json=payload, timeout=timeout)
+    resp = _post("/v1/embeddings", payload, timeout=timeout)
     resp.raise_for_status()
     data = resp.json().get("data", [])
     out: List[List[float]] = []
