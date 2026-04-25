@@ -135,13 +135,78 @@ def _has_duplicate_lines(poem_text: str) -> bool:
     return len(lines) != len(set(lines))
 
 
+def _requires_anti_libai_style(requirement: str) -> bool:
+    req = str(requirement or "").strip()
+    direct_patterns = [
+        "不像李白",
+        "不要李白",
+        "不要李白风格",
+        "避开李白",
+        "非李白",
+        "别学李白",
+        "不学李白",
+    ]
+    if any(p in req for p in direct_patterns):
+        return True
+    if "李白" in req and re.search(r"(不|别|避开|避免|不要|非).{0,4}李白|李白.{0,4}(不|别|不要|避免|避开|非)", req):
+        return True
+    return False
+
+
+def _infer_forbidden_terms(requirement: str) -> List[str]:
+    req = str(requirement or "").strip()
+    if not req:
+        return []
+
+    terms: List[str] = []
+
+    # 典型形式：不包含“月”、不能出现“明月”、不含'酒'
+    for pattern in [
+        r"(?:不包含|不含|不要出现|不能出现|不得出现|避免出现)[“\"'‘]([\u4e00-\u9fff]{1,8})[”\"'’](?:字|词)?",
+        r"(?:不包含|不含|不要出现|不能出现|不得出现|避免出现)[“\"'‘]([\u4e00-\u9fff]{1,8})[”\"'’]",
+    ]:
+        for token in re.findall(pattern, req):
+            term = str(token).strip()
+            if term:
+                terms.append(term)
+
+    # 典型形式：不包含月字 / 不要酒字
+    for token in re.findall(r"(?:不包含|不含|不要|不能出现|不得出现|避免出现)([\u4e00-\u9fff])字", req):
+        term = str(token).strip()
+        if term:
+            terms.append(term)
+
+    # 典型形式：不得出现“思乡”一词
+    for token in re.findall(r"(?:不包含|不含|不要出现|不能出现|不得出现|避免出现)([\u4e00-\u9fff]{1,8})(?:一词|这个词|词)", req):
+        term = str(token).strip()
+        if term:
+            terms.append(term)
+
+    dedup: List[str] = []
+    seen = set()
+    for term in terms:
+        if term not in seen:
+            dedup.append(term)
+            seen.add(term)
+    return dedup
+
+
+def _find_forbidden_terms_in_text(poem_text: str, forbidden_terms: List[str]) -> List[str]:
+    hits: List[str] = []
+    for term in forbidden_terms:
+        term = str(term or "").strip()
+        if term and term in poem_text:
+            hits.append(term)
+    return hits
+
+
 class TangPoetryEngine:
     def __init__(
         self,
         data_path: str,
         cache_path: str,
         embed_model: str = "bge-m3",
-        llm_model: str = "qwen3.5:0.8b",
+        llm_model: str = "qwen3:0.6b",
     ) -> None:
         self.data_path = data_path
         self.cache_path = cache_path
@@ -247,18 +312,30 @@ class TangPoetryEngine:
         q_vec = embed(query, model=self.embed_model, timeout=120)[0]
         scored: List[Tuple[Poem, float]] = []
         target_author = author_style.strip()
+        anti_libai = _requires_anti_libai_style(requirement)
         for poem, vec in zip(self.poems, self.vectors):
             score = _cosine_similarity(q_vec, vec)
             if target_author and poem.author == target_author:
                 score += 0.08
+            # 强约束：用户要求“不像李白”时，对李白样本显著降权。
+            if anti_libai and poem.author == "李白":
+                score -= 0.35
             scored.append((poem, score))
         scored.sort(key=lambda x: x[1], reverse=True)
+
+        if anti_libai:
+            non_libai = [item for item in scored if item[0].author != "李白"]
+            # 硬约束：只要要求“非李白”，source 中李白占比必须 0%。
+            # 因此这里不做回退，宁可返回更少参考也不引入李白样本。
+            return non_libai[:top_k]
         return scored[:top_k]
 
     def _build_generation_prompt(
         self, requirement: str, author_style: str, refs: List[Tuple[Poem, float]]
     ) -> str:
         constraints = _infer_poem_constraints(requirement)
+        anti_libai = _requires_anti_libai_style(requirement)
+        forbidden_terms = _infer_forbidden_terms(requirement)
         chars_per_line = constraints.get("chars_per_line")
         line_count = constraints.get("line_count")
         meter_line = ""
@@ -275,7 +352,19 @@ class TangPoetryEngine:
                 f"[参考{idx}] 题目《{poem.title}》 作者：{poem.author} 相似度：{score:.4f}\n{poem.content}"
             )
         ref_text = "\n\n".join(ref_block)
-        style_line = author_style.strip() or "不限（偏唐诗古典风格）"
+        if anti_libai and not author_style.strip():
+            style_line = "非李白风格（偏王维/杜牧的含蓄凝练表达）"
+        else:
+            style_line = author_style.strip() or "不限（偏唐诗古典风格）"
+        anti_style_line = ""
+        if anti_libai:
+            anti_style_line = (
+                "- 风格负向约束（强制）：不得出现李白标签化表达（如谪仙、将进酒、举杯邀明月等同类句法）；\n"
+                "- 语气需含蓄克制，避免豪放飞仙、纵酒高歌腔调；\n"
+            )
+        forbidden_line = ""
+        if forbidden_terms:
+            forbidden_line = f"- 禁止出现以下字词（硬约束）：{'、'.join(forbidden_terms)}；\n"
         return (
             f"用户要求：{requirement.strip()}\n"
             f"指定风格：{style_line}\n\n"
@@ -284,6 +373,8 @@ class TangPoetryEngine:
             "1) 风格贴近指定作者或参考诗作；\n"
             "2) 语言自然，意象统一；\n"
             f"3) 格式约束：\n{meter_line}"
+            f"{anti_style_line}"
+            f"{forbidden_line}"
             "4) 输出仅包含诗正文，不要解释，不要标题，不要 markdown。"
         )
 
@@ -397,6 +488,64 @@ class TangPoetryEngine:
             )
         )
 
+    def _rewrite_to_avoid_forbidden_terms(
+        self,
+        poem_text: str,
+        requirement: str,
+        author_style: str,
+        constraints: Dict[str, Optional[int]],
+        forbidden_terms: List[str],
+    ) -> str:
+        chars_per_line = constraints.get("chars_per_line")
+        line_count = constraints.get("line_count")
+        style_line = author_style.strip() or "古典唐诗风格"
+        format_req = []
+        if chars_per_line is not None:
+            format_req.append(f"每句 {chars_per_line} 字")
+        if line_count is not None:
+            format_req.append(f"共 {line_count} 句")
+        format_text = "，".join(format_req) if format_req else "句式统一"
+        forbidden_text = "、".join(forbidden_terms)
+        prompt = (
+            f"原始要求：{requirement.strip()}\n"
+            f"风格要求：{style_line}\n"
+            f"格式要求：{format_text}\n"
+            f"硬约束：不得出现这些字词：{forbidden_text}\n"
+            "请在保持主题的同时重写下面诗稿，并严格遵守硬约束。\n"
+            "只输出诗正文，每句单独一行，不要解释。\n\n"
+            f"原诗稿：\n{poem_text}"
+        )
+        return _clean_poem_text(
+            chat(
+                "你是严格的古诗约束修正助手，必须满足禁用字词与格律要求。",
+                prompt,
+                model=self.llm_model,
+                timeout=120,
+                temperature=0.25,
+            )
+        )
+
+    def _force_replace_forbidden_terms(self, poem_text: str, forbidden_terms: List[str]) -> str:
+        forbidden_set = set("".join(forbidden_terms))
+        safe_chars = [c for c in list("山水风云江海秋夜花灯舟客烟雨松城雁渔") if c not in forbidden_set]
+        if not safe_chars:
+            safe_chars = list("山水风云江海秋夜")
+
+        out = poem_text
+        cursor = 0
+        for term in forbidden_terms:
+            term = str(term or "").strip()
+            if not term:
+                continue
+            while term in out:
+                if len(term) == 1:
+                    replacement = safe_chars[cursor % len(safe_chars)]
+                else:
+                    replacement = "".join([safe_chars[(cursor + i) % len(safe_chars)] for i in range(len(term))])
+                out = out.replace(term, replacement, 1)
+                cursor += 1
+        return out
+
     def _force_shape_poem(
         self,
         poem_text: str,
@@ -505,6 +654,7 @@ class TangPoetryEngine:
         text = chat(system_prompt, prompt, model=self.llm_model, timeout=120, temperature=0.75)
         poem_text = _clean_poem_text(text)
         constraints = _infer_poem_constraints(requirement)
+        forbidden_terms = _infer_forbidden_terms(requirement)
         valid, constraint_msg = _validate_poem_constraints(poem_text, constraints)
         if not valid:
             repaired = self._repair_poem_to_constraints(
@@ -559,9 +709,39 @@ class TangPoetryEngine:
         if _has_duplicate_lines(poem_text):
             poem_text = self._force_deduplicate_lines(poem_text, constraints, refs)
 
+        forbidden_msg = ""
+        if forbidden_terms:
+            for _ in range(2):
+                hits = _find_forbidden_terms_in_text(poem_text, forbidden_terms)
+                if not hits:
+                    break
+                candidate = self._rewrite_to_avoid_forbidden_terms(
+                    poem_text=poem_text,
+                    requirement=requirement,
+                    author_style=author_style,
+                    constraints=constraints,
+                    forbidden_terms=forbidden_terms,
+                )
+                c_valid, _ = _validate_poem_constraints(candidate, constraints)
+                if not c_valid:
+                    candidate = self._force_shape_poem(candidate, constraints, refs)
+                poem_text = candidate
+
+            final_hits = _find_forbidden_terms_in_text(poem_text, forbidden_terms)
+            if final_hits:
+                poem_text = self._force_replace_forbidden_terms(poem_text, forbidden_terms)
+                c_valid, _ = _validate_poem_constraints(poem_text, constraints)
+                if not c_valid:
+                    poem_text = self._force_shape_poem(poem_text, constraints, refs)
+                final_hits = _find_forbidden_terms_in_text(poem_text, forbidden_terms)
+            if final_hits:
+                forbidden_msg = f"包含禁用字词：{'、'.join(final_hits)}"
+
         repetition_message = ""
         if _has_duplicate_lines(poem_text):
             repetition_message = "仍存在重复句，可再次生成获取更多变化。"
+        if forbidden_msg:
+            constraint_msg = f"{constraint_msg}；{forbidden_msg}" if constraint_msg else forbidden_msg
 
         return {
             "poem": poem_text,
@@ -578,6 +758,7 @@ class TangPoetryEngine:
             "models": {"llm": self.llm_model, "embedding": self.embed_model},
             "constraintPassed": not bool(constraint_msg),
             "constraintMessage": constraint_msg,
+            "forbiddenTerms": forbidden_terms,
             "repetitionScore": round(_repetition_score(poem_text), 4),
             "repetitionMessage": repetition_message,
         }

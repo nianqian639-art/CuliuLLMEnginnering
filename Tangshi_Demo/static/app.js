@@ -102,15 +102,21 @@ async function generatePoem() {
     }
 
     el("poemResult").textContent = data.data.poem || "";
+    const check = data.data.constraintCheck || {};
     el("meta").innerHTML = [
       `<span>耗时：${data.data.elapsedMs} ms</span>`,
       `<span>LLM：${escapeHtml(data.data.models.llm)}</span>`,
       `<span>Embedding：${escapeHtml(data.data.models.embedding)}</span>`,
       `<span>格律校验：${data.data.constraintPassed ? "通过" : "未通过"}</span>`,
       `<span>重复度分数：${data.data.repetitionScore ?? "-"}</span>`,
+      `<span>自动修复轮次：${data.data.repairAttempts ?? 0}</span>`,
+      `<span>ConstraintCheck：${escapeHtml(check.decision || "-")}</span>`,
     ].join("");
     renderReferences(data.data.references || []);
-    if (!data.data.constraintPassed) {
+    if (check.pass === false) {
+      const firstIssue = (check.problemParts || [])[0] || "约束未通过";
+      el("status").textContent = `生成完成（${check.decision || "revise"}：${firstIssue}）`;
+    } else if (!data.data.constraintPassed) {
       const msg = data.data.constraintMessage || "字数或句数未严格匹配";
       el("status").textContent = `生成完成（提示：${msg}）`;
     } else if (data.data.repetitionMessage) {

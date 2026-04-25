@@ -4,7 +4,7 @@ from typing import List, Sequence, Union
 import requests
 
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://127.0.0.1:11434").rstrip("/")
-DEFAULT_CHAT_MODEL = os.getenv("OLLAMA_CHAT_MODEL", "qwen3.5:0.8b")
+DEFAULT_CHAT_MODEL = os.getenv("OLLAMA_CHAT_MODEL", "qwen3:0.6b")
 DEFAULT_EMBED_MODEL = os.getenv("OLLAMA_EMBED_MODEL", "bge-m3")
 OLLAMA_THINKING = os.getenv("OLLAMA_THINKING", "0").lower() in ("1", "true", "yes", "on")
 OLLAMA_OUTPUT_MODE = os.getenv("OLLAMA_OUTPUT_MODE", "generate").strip().lower()

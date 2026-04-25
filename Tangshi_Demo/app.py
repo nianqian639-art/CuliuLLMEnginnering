@@ -4,13 +4,14 @@ from typing import Any, Tuple
 
 from flask import Flask, jsonify, render_template, request
 
+from constraint_check_skill import ConstraintCheckSkill
 from poetry_engine import TangPoetryEngine
 
 BASE_DIR = os.path.dirname(__file__)
 DATA_PATH = os.path.join(BASE_DIR, "300.json")
 CACHE_PATH = os.path.join(BASE_DIR, "data", "poem_vectors.json")
 EMBED_MODEL = os.getenv("OLLAMA_EMBED_MODEL", "bge-m3")
-LLM_MODEL = os.getenv("OLLAMA_CHAT_MODEL", "qwen3.5:0.8b")
+LLM_MODEL = os.getenv("OLLAMA_CHAT_MODEL", "qwen3:0.6b")
 
 app = Flask(__name__)
 app.config["JSON_AS_ASCII"] = False
@@ -21,6 +22,7 @@ engine = TangPoetryEngine(
     embed_model=EMBED_MODEL,
     llm_model=LLM_MODEL,
 )
+constraint_checker = ConstraintCheckSkill()
 build_info = None
 build_error = ""
 
@@ -107,12 +109,67 @@ def generate() -> Any:
         return jsonify({"success": False, "message": "requirement 不能为空"}), 400
 
     started = time.perf_counter()
+    repair_attempts = 0
+    max_repair_attempts = 2
+    result: Any = {}
+    check_report: Any = {}
     try:
-        result = engine.generate(requirement=requirement, author_style=author_style, top_k=top_k)
+        effective_requirement = requirement
+        while True:
+            result = engine.generate(requirement=effective_requirement, author_style=author_style, top_k=top_k)
+            check_report = constraint_checker.check(
+                poem_text=str(result.get("poem") or ""),
+                user_requirement=requirement,
+                retrieved_samples=result.get("references") or [],
+                author_style=author_style,
+            )
+            if bool(check_report.get("pass")):
+                break
+            if repair_attempts >= max_repair_attempts:
+                break
+            repair_attempts += 1
+            repair_steps = check_report.get("repairInstructions") or []
+            repair_steps = [str(step).strip() for step in repair_steps if str(step).strip()]
+            if repair_steps:
+                extra_rule = "；".join(repair_steps[:3])
+                effective_requirement = f"{requirement}\n补充硬约束：{extra_rule}"
+            else:
+                effective_requirement = requirement
     except Exception as e:
         return jsonify({"success": False, "message": f"生成失败：{e}"}), 500
     elapsed_ms = int((time.perf_counter() - started) * 1000)
-    return jsonify({"success": True, "data": {**result, "elapsedMs": elapsed_ms}})
+    data = {
+        **result,
+        "elapsedMs": elapsed_ms,
+        "repairAttempts": repair_attempts,
+        "constraintCheck": check_report,
+        "constraintPassed": bool(result.get("constraintPassed", True)) and bool(check_report.get("pass")),
+    }
+    return jsonify({"success": True, "data": data})
+
+
+@app.route("/api/tangshi/constraint_check", methods=["POST"])
+def constraint_check() -> Any:
+    payload = request.json or {}
+    poem_text = str(payload.get("poem_text") or "").strip()
+    user_requirement = str(payload.get("user_requirement") or "").strip()
+    author_style = str(payload.get("author_style") or "").strip()
+    retrieved_samples = payload.get("retrieved_samples") or []
+
+    if not poem_text:
+        return jsonify({"success": False, "message": "poem_text 不能为空"}), 400
+    if not user_requirement:
+        return jsonify({"success": False, "message": "user_requirement 不能为空"}), 400
+    if not isinstance(retrieved_samples, list):
+        return jsonify({"success": False, "message": "retrieved_samples 必须是数组"}), 400
+
+    report = constraint_checker.check(
+        poem_text=poem_text,
+        user_requirement=user_requirement,
+        retrieved_samples=retrieved_samples,
+        author_style=author_style,
+    )
+    return jsonify({"success": True, "data": report})
 
 
 if __name__ == "__main__":

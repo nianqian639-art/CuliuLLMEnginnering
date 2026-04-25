@@ -3,7 +3,7 @@
 一个可直接运行的唐诗仿作网页 Demo：
 
 - 向量模型：`bge-m3`（Ollama）
-- 生成模型：`qwen3.5:0.8b`（Ollama）
+- 生成模型：`qwen3:0.6b`（Ollama）
 - 后端：Flask
 - 前端：原生 HTML/CSS/JS
 - 数据：`300.json`（`title/author/paragraphs`）
@@ -16,7 +16,7 @@
 4. 用户在网页输入作诗要求并选择诗人风格
 5. 后端把用户需求向量化并做 Top-K 相似检索
 6. 把检索参考 + 风格要求拼接为 Prompt
-7. 调用 `qwen3.5:0.8b` 生成仿作诗
+7. 调用 `qwen3:0.6b` 生成仿作诗
 8. 前端展示结果、参考诗作、耗时，以及最近几首原诗
 
 ## 2. 目录说明
@@ -42,7 +42,7 @@ pip install -r requirements.txt
 
 ```bash
 ollama pull bge-m3
-ollama pull qwen3.5:0.8b
+ollama pull qwen3:0.6b
 ollama list
 ```
 
@@ -57,7 +57,7 @@ set OLLAMA_API_TOKEN=你的token
 
 # 如需切换地址/模型
 set OLLAMA_BASE_URL=http://127.0.0.1:11434
-set OLLAMA_CHAT_MODEL=qwen3.5:0.8b
+set OLLAMA_CHAT_MODEL=qwen3:0.6b
 set OLLAMA_EMBED_MODEL=bge-m3
 ```
 
@@ -119,10 +119,55 @@ python app.py
       }
     ],
     "models": {
-      "llm": "qwen3.5:0.8b",
+      "llm": "qwen3:0.6b",
       "embedding": "bge-m3"
     },
     "elapsedMs": 1234
+  }
+}
+```
+
+### 5.5 约束检查 Skill（ConstraintCheckSkill）
+
+`POST /api/tangshi/constraint_check`
+
+用途：对“已生成候选诗作”做独立约束检查，不负责生成与检索。
+
+请求体示例：
+
+```json
+{
+  "poem_text": "月落江寒夜未央\n客舟灯短照归肠\n...",
+  "user_requirement": "写一首不像李白的七言绝句",
+  "author_style": "",
+  "retrieved_samples": [
+    {"author": "李白", "title": "静夜思"},
+    {"author": "王维", "title": "山居秋暝"}
+  ]
+}
+```
+
+返回示例（节选）：
+
+```json
+{
+  "success": true,
+  "data": {
+    "skill": "ConstraintCheckSkill",
+    "pass": false,
+    "decision": "regenerate",
+    "problemParts": ["命中李白风格高辨识表达，违反“不像李白”约束"],
+    "normalizedRequirements": [
+      "用户要求: 写一首不像李白的七言绝句",
+      "字数约束: 每句7字",
+      "句数约束: 全诗4句",
+      "风格负向约束: 不像李白"
+    ],
+    "repairInstructions": [
+      "删除李白标签化表达（如谪仙、将进酒、举杯邀明月等同类句法）。",
+      "改用含蓄克制、细节化表达，可参考王维/杜牧风格。"
+    ],
+    "outputFormat": "json"
   }
 }
 ```
